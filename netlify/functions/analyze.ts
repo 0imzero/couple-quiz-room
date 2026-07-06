@@ -24,7 +24,7 @@ type Report = {
 };
 
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
-const DEFAULT_MODEL = "deepseek-v4-pro";
+const DEFAULT_MODEL = "deepseek-v4-flash";
 
 const ANALYSIS_PROMPT_LINES = [
   "你是一个成熟、克制、务实的情侣同居沟通分析助手。",
@@ -45,7 +45,7 @@ function getEnv(name: string) {
   return netlifyEnv?.env?.get(name) ?? process.env[name];
 }
 
-function fallbackReport(payload: Payload): Report {
+function fallbackReport(payload: Payload, reason?: string): Report {
   const mode = payload.mode ?? "couple";
   const scored = payload.scores.filter((score) => score.score !== null);
   const average = scored.length
@@ -57,14 +57,14 @@ function fallbackReport(payload: Payload): Report {
   if (mode !== "couple") {
     const answered = payload.answers.length;
     return {
-      summary: mode === "self" ? "\u5df2\u751f\u6210\u4f60\u7684\u4e2a\u4eba\u504f\u597d\u6982\u89c8\u3002" : "\u5df2\u751f\u6210\u5bf9\u65b9\u7684\u504f\u597d\u6982\u89c8\u3002",
+      summary: reason ?? (mode === "self" ? "\u5df2\u751f\u6210\u4f60\u7684\u4e2a\u4eba\u504f\u597d\u6982\u89c8\u3002" : "\u5df2\u751f\u6210\u5bf9\u65b9\u7684\u504f\u597d\u6982\u89c8\u3002"),
       sections: [],
       full: `\u5df2\u6574\u7406 ${answered} \u6761\u56de\u7b54\u3002\u8bf7\u91cd\u70b9\u770b\u5176\u4e2d\u7684\u5b8c\u5168 no / \u5b8c\u5168 yes\uff0c\u5b83\u4eec\u901a\u5e38\u4ee3\u8868\u66f4\u660e\u786e\u7684\u8fb9\u754c\uff1b\u9009\u62e9\u65e0\u6240\u8c13\u7684\u9898\u76ee\u66f4\u9002\u5408\u89c6\u4e3a\u5f39\u6027\u7a7a\u95f4\u3002`,
     };
   }
 
   return {
-    summary: average === null ? "还需要双方多回答一些问题。" : `当前整体匹配度约 ${average} 分。`,
+    summary: reason ?? (average === null ? "\u8fd8\u9700\u8981\u53cc\u65b9\u591a\u56de\u7b54\u4e00\u4e9b\u95ee\u9898\u3002" : `\u5f53\u524d\u6574\u4f53\u5339\u914d\u5ea6\u7ea6 ${average} \u5206\u3002`),
     sections: payload.scores.map((score) => ({
       title: score.title,
       score: score.score,
@@ -106,14 +106,53 @@ function compactAnswers(payload: Payload) {
   });
 }
 
-function extractJson(text: string) {
+function extractJsonCandidate(text: string) {
   const trimmed = text.trim();
-  const fenced = trimmed.match(/```json\s*([\s\S]*?)\s*```/i);
+  const fenced = trimmed.match(/```json\s*([\s\S]*?)\s*```/i) ?? trimmed.match(/```\s*([\s\S]*?)\s*```/i);
   const raw = fenced?.[1] ?? trimmed;
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
-  if (start === -1 || end === -1) throw new Error("模型没有返回 JSON");
-  return JSON.parse(raw.slice(start, end + 1)) as Report;
+  if (start === -1 || end === -1 || end <= start) return "";
+  return raw.slice(start, end + 1);
+}
+
+function parseModelReport(text: string) {
+  const candidate = extractJsonCandidate(text);
+  if (!candidate) throw new Error("model returned no JSON object");
+  const attempts = [
+    candidate,
+    candidate.replace(/,\s*([}\]])/g, "$1"),
+    candidate.replace(/[\u201c\u201d]/g, "\"").replace(/[\u2018\u2019]/g, "\'").replace(/,\s*([}\]])/g, "$1"),
+  ];
+
+  let lastError: unknown;
+  for (const attempt of attempts) {
+    try {
+      return JSON.parse(attempt) as Partial<Report>;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("model JSON parse failed");
+}
+
+function normalizeReport(report: Partial<Report>, payload: Payload): Report {
+  const fallback = fallbackReport(payload);
+  return {
+    summary: typeof report.summary === "string" && report.summary.trim() ? report.summary.trim() : fallback.summary,
+    sections: Array.isArray(report.sections)
+      ? report.sections.map((section, index) => ({
+          title: typeof section?.title === "string" && section.title.trim() ? section.title.trim() : fallback.sections[index]?.title ?? "\u5206\u6790\u5206\u533a",
+          score: typeof section?.score === "number" ? Math.max(0, Math.min(100, Math.round(section.score))) : null,
+          comment: typeof section?.comment === "string" && section.comment.trim() ? section.comment.trim() : fallback.sections[index]?.comment ?? "\u5efa\u8bae\u7ee7\u7eed\u6c9f\u901a\u5177\u4f53\u8fb9\u754c\u3002",
+        }))
+      : fallback.sections,
+    full: typeof report.full === "string" && report.full.trim() ? report.full.trim() : fallback.full,
+  };
+}
+
+function stableFallback(payload: Payload, reason: string) {
+  return fallbackReport(payload, reason);
 }
 
 export default async (req: Request, _context: Context) => {
@@ -158,13 +197,15 @@ export default async (req: Request, _context: Context) => {
           },
           prompt,
         ],
-        temperature: 0.4,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
       }),
     });
 
     if (!response.ok) {
       const text = await response.text();
-      return Response.json({ error: `AI provider error: ${text.slice(0, 500)}` }, { status: 502 });
+      console.error("AI provider error", text.slice(0, 500));
+      return Response.json(stableFallback(payload, "AI \u670d\u52a1\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u5df2\u5148\u751f\u6210\u57fa\u7840\u5206\u6790\u3002"));
     }
 
     const text = await response.text();
@@ -172,15 +213,21 @@ export default async (req: Request, _context: Context) => {
     try {
       data = JSON.parse(text);
     } catch {
-      return Response.json({ error: "AI provider did not return JSON." }, { status: 502 });
+      console.error("AI provider returned non-JSON", text.slice(0, 500));
+      return Response.json(stableFallback(payload, "AI \u670d\u52a1\u8fd4\u56de\u5f02\u5e38\uff0c\u5df2\u5148\u751f\u6210\u57fa\u7840\u5206\u6790\u3002"));
     }
 
     const content = data?.choices?.[0]?.message?.content;
     if (!content) {
-      return Response.json({ error: "AI provider returned an empty response" }, { status: 502 });
+      return Response.json(stableFallback(payload, "AI \u6682\u65f6\u6ca1\u6709\u8fd4\u56de\u5185\u5bb9\uff0c\u5df2\u5148\u751f\u6210\u57fa\u7840\u5206\u6790\u3002"));
     }
 
-    return Response.json(extractJson(content));
+    try {
+      return Response.json(normalizeReport(parseModelReport(content), payload));
+    } catch (error) {
+      console.error("AI model returned invalid report JSON", error, content.slice(0, 1000));
+      return Response.json(stableFallback(payload, "AI \u8fd4\u56de\u683c\u5f0f\u4e0d\u7a33\u5b9a\uff0c\u5df2\u5148\u751f\u6210\u57fa\u7840\u5206\u6790\u3002"));
+    }
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "AI \u5206\u6790\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002" },
