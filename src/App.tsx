@@ -536,7 +536,7 @@ function App() {
             <section className="report-box">
               <div className="panel-heading">
                 <Sparkles size={18} />
-                <h3>AI ??</h3>
+                <h3>AI 分析</h3>
               </div>
               <ReportButton mode="self" loading={reportLoading} disabled={!canAnalyzeSelf} onClick={requestReport} />
               <ReportButton mode="partner" loading={reportLoading} disabled={!canAnalyzePartner} onClick={requestReport} />
@@ -547,7 +547,7 @@ function App() {
                 if (!report) return null;
                 return (
                   <div className="report-content" key={mode}>
-                    <strong>{reportModeLabels[mode]}?{report.summary}</strong>
+                    <strong>{reportModeLabels[mode]}：{report.summary}</strong>
                     <p>{report.full}</p>
                   </div>
                 );
@@ -562,7 +562,7 @@ function App() {
 
 function RatingBar({ value, answered, onChange }: { value: number; answered: boolean; onChange: (value: number) => void }) {
   return (
-    <div className="rating-control" role="radiogroup" aria-label="??????">
+    <div className="rating-control" role="radiogroup" aria-label="五档态度选择">
       <div className="rating-track" aria-hidden="true">
         <div className="rating-fill" style={{ width: String(((value - 1) / 4) * 100) + "%" }} />
       </div>
@@ -585,7 +585,7 @@ function RatingBar({ value, answered, onChange }: { value: number; answered: boo
           );
         })}
       </div>
-      <strong className="rating-current">{answered ? answerLabels[value - 1] : "??????????"}</strong>
+      <strong className="rating-current">{answered ? answerLabels[value - 1] : "默认无所谓，点击确认"}</strong>
     </div>
   );
 }
@@ -619,8 +619,8 @@ function AnalysisLoading({ mode }: { mode: ReportMode }) {
         <span />
       </div>
       <div>
-        <strong>????{reportModeLabels[mode]}</strong>
-        <p>AI ?????????????????????</p>
+        <strong>正在生成{reportModeLabels[mode]}</strong>
+        <p>AI 可能需要分析一分钟左右，请先不要重复点击。</p>
       </div>
     </div>
   );
