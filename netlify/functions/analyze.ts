@@ -96,7 +96,7 @@ export default async (req: Request, _context: Context) => {
 
   const payload = (await req.json()) as Payload;
   const apiKey = getEnv("AI_API_KEY");
-  const model = getEnv("AI_MODEL") ?? DEFAULT_MODEL;
+  const model = DEFAULT_MODEL;
 
   if (!apiKey) {
     return Response.json(fallbackReport(payload));
@@ -156,3 +156,4 @@ export const config: Config = {
   path: "/api/analyze",
   method: ["POST"],
 };
+
