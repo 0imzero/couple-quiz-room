@@ -6,7 +6,10 @@ type Score = {
   paired: number;
 };
 
+type AnalysisMode = "self" | "partner" | "couple";
+
 type Payload = {
+  mode?: AnalysisMode;
   participants: Array<{ side: "male" | "female"; nickname: string; submitted_at?: string | null }>;
   answers: Array<{ side: "male" | "female"; question_id: number; value: number; note: string }>;
   questions: Array<{ id: number; sectionId: string; text: string }>;
@@ -31,6 +34,9 @@ const ANALYSIS_PROMPT_LINES = [
   "不要制造焦虑，不要下定论说适不适合，只指出高一致区、风险区和建议沟通的问题。",
   "请把备注看得比数字更重要：备注里出现条件、边界、例外时，要用温和语言总结。",
   "只返回 JSON，结构必须是：",
+  "\u5982\u679c mode=self\uff0c\u53ea\u5206\u6790\u7528\u6237\u81ea\u5df1\u7684\u751f\u6d3b\u504f\u597d\u3001\u5f3a\u8fb9\u754c\u548c\u53ef\u6c9f\u901a\u70b9\uff0c\u4e0d\u8bc4\u4ef7\u5bf9\u65b9\u3002",
+  "\u5982\u679c mode=partner\uff0c\u53ea\u5206\u6790\u5bf9\u65b9\u7b54\u6848\u5448\u73b0\u51fa\u7684\u504f\u597d\u548c\u8fb9\u754c\uff0c\u4e0d\u66ff\u7528\u6237\u505a\u4ef7\u503c\u5224\u65ad\u3002",
+  "\u5982\u679c mode=couple\uff0c\u5206\u6790\u53cc\u65b9\u4e00\u81f4\u533a\u3001\u6f5c\u5728\u51b2\u7a81\u533a\u548c\u6700\u503c\u5f97\u5750\u4e0b\u6765\u804a\u7684\u9898\u76ee\u3002",
   '{"summary":"一句话总评","sections":[{"title":"分区名","score":80,"comment":"一句话"}],"full":"完整评价，200-500 字"}',
 ];
 
@@ -40,12 +46,22 @@ function getEnv(name: string) {
 }
 
 function fallbackReport(payload: Payload): Report {
+  const mode = payload.mode ?? "couple";
   const scored = payload.scores.filter((score) => score.score !== null);
   const average = scored.length
     ? Math.round(scored.reduce((sum, score) => sum + (score.score ?? 0), 0) / scored.length)
     : null;
   const weakest = scored.slice().sort((a, b) => (a.score ?? 0) - (b.score ?? 0))[0];
   const strongest = scored.slice().sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
+
+  if (mode !== "couple") {
+    const answered = payload.answers.length;
+    return {
+      summary: mode === "self" ? "?????????????" : "????????????",
+      sections: [],
+      full: `???? ${answered} ??????????????? no / ?? yes?????????????????????????????????????????`,
+    };
+  }
 
   return {
     summary: average === null ? "还需要双方多回答一些问题。" : `当前整体匹配度约 ${average} 分。`,
@@ -118,6 +134,7 @@ export default async (req: Request, _context: Context) => {
     content: [
       ...ANALYSIS_PROMPT_LINES,
       JSON.stringify({
+        mode: payload.mode ?? "couple",
         participants: payload.participants,
         scores: payload.scores,
         answers: compactAnswers(payload),

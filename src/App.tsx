@@ -10,7 +10,7 @@ import {
   UserRound,
   UsersRound,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { answerLabels, questions, sections } from "./data/questions";
 import {
   clearSession,
@@ -42,6 +42,14 @@ type ReportResult = {
   full: string;
 };
 
+type ReportMode = "self" | "partner" | "couple";
+
+const reportModeLabels: Record<ReportMode, string> = {
+  self: "\u6211\u7684\u5206\u6790",
+  partner: "\u5bf9\u65b9\u5206\u6790",
+  couple: "\u53cc\u65b9\u5b8c\u6574\u5206\u6790",
+};
+
 function generateRoomCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
@@ -67,8 +75,9 @@ function App() {
   const [openNotes, setOpenNotes] = useState<Set<number>>(new Set());
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
-  const [report, setReport] = useState<ReportResult | null>(null);
-  const [reportLoading, setReportLoading] = useState(false);
+  const [reports, setReports] = useState<Partial<Record<ReportMode, ReportResult>>>({});
+  const [reportLoading, setReportLoading] = useState<ReportMode | null>(null);
+  const workspaceTopRef = useRef<HTMLElement | null>(null);
 
   const activeSection = sections.find((section) => section.id === activeSectionId) ?? sections[0];
   const selfSide = session?.participant.side ?? "male";
@@ -85,6 +94,10 @@ function App() {
   const scores = canRevealPartner ? computeSectionScores(visibleAnswers, selfSide) : [];
   const selfAnsweredCount = selfSide === "male" ? progress.maleAnswered : progress.femaleAnswered;
   const canSubmit = selfAnsweredCount === questions.length;
+  const partnerAnsweredCount = selfSide === "male" ? progress.femaleAnswered : progress.maleAnswered;
+  const canAnalyzeSelf = selfAnsweredCount === questions.length;
+  const canAnalyzePartner = canRevealPartner && partnerAnsweredCount === questions.length;
+  const canAnalyzeCouple = canRevealPartner;
 
   const overallScore = useMemo(() => {
     const available = scores.filter((score) => score.score !== null);
@@ -312,7 +325,7 @@ function App() {
     setSession(null);
     setParticipants([]);
     setAnswers([]);
-    setReport(null);
+    setReports({});
     setNotice("");
   }
 
@@ -322,35 +335,58 @@ function App() {
     setNotice("邀请码已复制");
   }
 
-  async function requestReport() {
+  function getAnswersForReport(mode: ReportMode) {
+    if (mode === "self") return answers.filter((answer) => answer.side === selfSide);
+    if (mode === "partner") return answers.filter((answer) => answer.side === partnerSide);
+    return visibleAnswers;
+  }
+
+  async function requestReport(mode: ReportMode) {
     if (!session) return;
-    if (!canRevealPartner) {
-      setNotice("双方都提交后才能生成完整评价。");
+    if (mode === "self" && !canAnalyzeSelf) {
+      setNotice("\u7b54\u5b8c 50 \u9898\u540e\u624d\u80fd\u751f\u6210\u81ea\u5df1\u7684\u5206\u6790\u3002");
       return;
     }
-    setReportLoading(true);
+    if (mode === "partner" && !canAnalyzePartner) {
+      setNotice("\u53cc\u65b9\u90fd\u5b8c\u6210\u5e76\u63d0\u4ea4\u540e\u624d\u80fd\u67e5\u770b\u5bf9\u65b9\u5206\u6790\u3002");
+      return;
+    }
+    if (mode === "couple" && !canAnalyzeCouple) {
+      setNotice("\u53cc\u65b9\u90fd\u63d0\u4ea4\u540e\u624d\u80fd\u751f\u6210\u5b8c\u6574\u5171\u540c\u5206\u6790\u3002");
+      return;
+    }
+
+    setReportLoading(mode);
     setNotice("");
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          mode,
           room: session.room,
           participants,
-          answers: visibleAnswers,
+          answers: getAnswersForReport(mode),
           questions,
-          scores,
+          scores: mode === "couple" ? scores : [],
           selfSide,
         }),
       });
       const payload = (await response.json()) as ReportResult | { error: string };
-      if (!response.ok || "error" in payload) throw new Error("error" in payload ? payload.error : "评价生成失败");
-      setReport(payload);
+      if (!response.ok || "error" in payload) throw new Error("error" in payload ? payload.error : "\u8bc4\u4ef7\u751f\u6210\u5931\u8d25");
+      setReports((current) => ({ ...current, [mode]: payload }));
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "评价生成失败");
+      setNotice(error instanceof Error ? error.message : "\u8bc4\u4ef7\u751f\u6210\u5931\u8d25");
     } finally {
-      setReportLoading(false);
+      setReportLoading(null);
     }
+  }
+
+  function selectSection(sectionId: string) {
+    setActiveSectionId(sectionId);
+    window.requestAnimationFrame(() => {
+      workspaceTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   if (!session) {
@@ -409,7 +445,7 @@ function App() {
                 className={section.id === activeSection.id ? "section-pill active" : "section-pill"}
                 type="button"
                 style={{ "--section-color": section.color } as React.CSSProperties}
-                onClick={() => setActiveSectionId(section.id)}
+                onClick={() => selectSection(section.id)}
               >
                 <span>{section.shortTitle}</span>
                 <small>
@@ -426,7 +462,7 @@ function App() {
         </button>
       </aside>
 
-      <section className="workspace">
+      <section className="workspace" ref={workspaceTopRef}>
         <header className="workspace-header">
           <div>
             <p className="eyebrow">现在身份：{sideLabel(selfSide)}</p>
@@ -500,23 +536,93 @@ function App() {
             <section className="report-box">
               <div className="panel-heading">
                 <Sparkles size={18} />
-                <h3>完整评价</h3>
+                <h3>AI ??</h3>
               </div>
-              <button className="primary-button wide" type="button" onClick={requestReport} disabled={reportLoading || !canRevealPartner}>
-                {reportLoading ? <Loader2 className="spin" size={17} /> : <Sparkles size={17} />}
-                生成评价
-              </button>
-              {report && (
-                <div className="report-content">
-                  <strong>{report.summary}</strong>
-                  <p>{report.full}</p>
-                </div>
-              )}
+              <ReportButton mode="self" loading={reportLoading} disabled={!canAnalyzeSelf} onClick={requestReport} />
+              <ReportButton mode="partner" loading={reportLoading} disabled={!canAnalyzePartner} onClick={requestReport} />
+              <ReportButton mode="couple" loading={reportLoading} disabled={!canAnalyzeCouple} onClick={requestReport} />
+              {reportLoading && <AnalysisLoading mode={reportLoading} />}
+              {(["self", "partner", "couple"] as ReportMode[]).map((mode) => {
+                const report = reports[mode];
+                if (!report) return null;
+                return (
+                  <div className="report-content" key={mode}>
+                    <strong>{reportModeLabels[mode]}?{report.summary}</strong>
+                    <p>{report.full}</p>
+                  </div>
+                );
+              })}
             </section>
           </aside>
         </div>
       </section>
     </main>
+  );
+}
+
+function RatingBar({ value, answered, onChange }: { value: number; answered: boolean; onChange: (value: number) => void }) {
+  return (
+    <div className="rating-control" role="radiogroup" aria-label="??????">
+      <div className="rating-track" aria-hidden="true">
+        <div className="rating-fill" style={{ width: String(((value - 1) / 4) * 100) + "%" }} />
+      </div>
+      <div className="rating-options">
+        {answerLabels.map((label, index) => {
+          const optionValue = index + 1;
+          const selected = answered && value === optionValue;
+          return (
+            <button
+              key={label}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              className={selected ? "rating-option selected" : "rating-option"}
+              onClick={() => onChange(optionValue)}
+            >
+              <span className="rating-dot" />
+              <small>{label}</small>
+            </button>
+          );
+        })}
+      </div>
+      <strong className="rating-current">{answered ? answerLabels[value - 1] : "??????????"}</strong>
+    </div>
+  );
+}
+
+function ReportButton({
+  mode,
+  loading,
+  disabled,
+  onClick,
+}: {
+  mode: ReportMode;
+  loading: ReportMode | null;
+  disabled: boolean;
+  onClick: (mode: ReportMode) => void;
+}) {
+  const isLoading = loading === mode;
+  return (
+    <button className="primary-button wide report-action" type="button" onClick={() => onClick(mode)} disabled={disabled || Boolean(loading)}>
+      {isLoading ? <Loader2 className="spin" size={17} /> : <Sparkles size={17} />}
+      {reportModeLabels[mode]}
+    </button>
+  );
+}
+
+function AnalysisLoading({ mode }: { mode: ReportMode }) {
+  return (
+    <div className="analysis-loading" role="status" aria-live="polite">
+      <div className="analysis-orbit">
+        <span />
+        <span />
+        <span />
+      </div>
+      <div>
+        <strong>????{reportModeLabels[mode]}</strong>
+        <p>AI ?????????????????????</p>
+      </div>
+    </div>
   );
 }
 
@@ -561,18 +667,7 @@ function QuestionCard({
         <p>{questionText}</p>
       </div>
 
-      <div className="slider-row">
-        <input
-          aria-label={`${questionText} 答案`}
-          min={1}
-          max={5}
-          step={1}
-          type="range"
-          value={answer?.value ?? 3}
-          onChange={(event) => onValueChange(Number(event.currentTarget.value))}
-        />
-        <strong>{answerLabels[(answer?.value ?? 3) - 1]}</strong>
-      </div>
+      <RatingBar value={answer?.value ?? 3} answered={Boolean(answer)} onChange={onValueChange} />
 
       <div className="answer-meta">
         <span>对方：{revealPartner ? (partnerAnswer ? answerLabels[partnerAnswer.value - 1] : "未作答") : "已答状态提交后可见"}</span>
