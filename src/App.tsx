@@ -481,6 +481,8 @@ function App() {
         </button>
         {!canSubmit && <p className="helper-text">已答 {selfAnsweredCount}/50，答完后才能提交。</p>}
 
+        {notice && <div className="notice sidebar-notice">{notice}</div>}
+
         <nav className="section-nav" aria-label="问答分区">
           {sections.map((section) => {
             const score = scores.find((item) => item.sectionId === section.id);
@@ -528,8 +530,6 @@ function App() {
         {!canRevealPartner && (
           <div className="soft-alert">双方都完成 50 题并提交后，才会显示对方答案、备注、匹配度和 AI 评价。</div>
         )}
-        {notice && <div className="notice">{notice}</div>}
-
         <div className="content-grid">
           <div className="question-list">
             {questions

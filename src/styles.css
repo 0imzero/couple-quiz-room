@@ -276,6 +276,10 @@ button:focus-visible {
   border: 1px solid #cfe9df;
 }
 
+.sidebar-notice {
+  margin: 12px 0 14px;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 318px minmax(0, 1fr);
