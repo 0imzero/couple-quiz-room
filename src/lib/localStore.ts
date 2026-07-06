@@ -46,7 +46,7 @@ export function upsertLocalParticipant(room: Room, side: Side, nickname: string)
   const participants = readJson<Participant[]>(LOCAL_PARTICIPANTS_KEY, []);
   const existing = participants.find((participant) => participant.room_id === room.id && participant.side === side);
   if (existing && existing.nickname.trim() !== nickname.trim()) {
-    throw new Error(`${side === "male" ? "男生" : "女生"} side 已由「${existing.nickname}」使用，不能换名字登录。`);
+    throw new Error(`${side === "male" ? "\u7537\u751f" : "\u5973\u751f"} side \u5df2\u6709\u4eba\u4f7f\u7528\u3002\u8bf7\u786e\u8ba4\u4f60\u9009\u62e9\u4e86\u81ea\u5df1\u7684 side\uff0c\u6216\u8054\u7cfb\u5bf9\u65b9\u91cd\u65b0\u786e\u8ba4\u623f\u95f4\u3002`);
   }
   const participant: Participant = existing
     ? { ...existing, nickname, updated_at: new Date().toISOString() }

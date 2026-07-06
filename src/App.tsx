@@ -28,6 +28,16 @@ import { computeSectionScores, getAnswerMap, getPartnerSide, summarizeProgress }
 import { isSupabaseConfigured, supabase } from "./lib/supabase";
 import type { Answer, Participant, Room, Section, SectionScore, Session, Side } from "./types";
 
+type AnalyzeRequestPayload = {
+  mode: ReportMode;
+  room: Room;
+  participants: Participant[];
+  answers: Answer[];
+  questions: typeof questions;
+  scores: SectionScore[];
+  selfSide: Side;
+};
+
 const referenceImages: Record<string, string> = {
   sleep: "/reference/sleep.png",
   chores: "/reference/chores.png",
@@ -89,6 +99,46 @@ function readCachedReport(roomId: string, mode: ReportMode, version: string) {
 
 function writeCachedReport(roomId: string, mode: ReportMode, version: string, result: ReportResult) {
   localStorage.setItem(getReportCacheKey(roomId, mode), JSON.stringify({ version, result } satisfies CachedReport));
+}
+
+const analyzeEndpoints = ["/.netlify/functions/analyze", "/api/analyze"];
+
+async function requestAnalysis(payload: AnalyzeRequestPayload) {
+  const htmlErrors: string[] = [];
+
+  for (const endpoint of analyzeEndpoints) {
+    let response: Response;
+    let rawPayload = "";
+
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      rawPayload = await response.text();
+    } catch (error) {
+      htmlErrors.push(`${endpoint} \u8bf7\u6c42\u5931\u8d25\uff1a${error instanceof Error ? error.message : "network error"}`);
+      continue;
+    }
+
+    let parsed: ReportResult | { error: string };
+    try {
+      parsed = JSON.parse(rawPayload) as ReportResult | { error: string };
+    } catch {
+      const snippet = rawPayload.replace(/\s+/g, " ").slice(0, 120);
+      htmlErrors.push(`${endpoint} \u8fd4\u56de\u4e86\u975e JSON\uff08HTTP ${response.status}\uff09\uff1a${snippet}`);
+      continue;
+    }
+
+    if (!response.ok || "error" in parsed) {
+      throw new Error("error" in parsed ? parsed.error : "\u8bc4\u4ef7\u751f\u6210\u5931\u8d25");
+    }
+
+    return parsed;
+  }
+
+  throw new Error(`AI \u51fd\u6570\u6ca1\u6709\u8fd4\u56de JSON\u3002\u5df2\u5c1d\u8bd5 ${analyzeEndpoints.join(" \u548c ")}\uff1b${htmlErrors.join("\uff1b")}`);
 }
 
 function App() {
@@ -196,7 +246,7 @@ function App() {
     if (existing) {
       const participant = existing as Participant;
       if (participant.nickname.trim() !== nickname.trim()) {
-        throw new Error(`${sideLabel(side)} 已由「${participant.nickname}」使用，不能换名字登录。`);
+        throw new Error(`${sideLabel(side)} \u5df2\u6709\u4eba\u4f7f\u7528\u3002\u8bf7\u786e\u8ba4\u4f60\u9009\u62e9\u4e86\u81ea\u5df1\u7684 side\uff0c\u6216\u8054\u7cfb\u5bf9\u65b9\u91cd\u65b0\u786e\u8ba4\u623f\u95f4\u3002`);
       }
       return participant;
     }
@@ -398,27 +448,15 @@ function App() {
     setReportLoading(mode);
     setNotice("");
     try {
-      const response = await fetch("/.netlify/functions/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          room: session.room,
-          participants,
-          answers: getAnswersForReport(mode),
-          questions,
-          scores: mode === "couple" ? scores : [],
-          selfSide,
-        }),
+      const payload = await requestAnalysis({
+        mode,
+        room: session.room,
+        participants,
+        answers: getAnswersForReport(mode),
+        questions,
+        scores: mode === "couple" ? scores : [],
+        selfSide,
       });
-      const rawPayload = await response.text();
-      let payload: ReportResult | { error: string };
-      try {
-        payload = JSON.parse(rawPayload) as ReportResult | { error: string };
-      } catch {
-        throw new Error("AI \u51fd\u6570\u6ca1\u6709\u8fd4\u56de JSON\u3002\u8bf7\u786e\u8ba4 Netlify \u6700\u65b0\u90e8\u7f72\u5b8c\u6210\uff0c\u5e76\u4e14 /.netlify/functions/analyze \u53ef\u4ee5\u6b63\u5e38\u8bbf\u95ee\u3002");
-      }
-      if (!response.ok || "error" in payload) throw new Error("error" in payload ? payload.error : "\u8bc4\u4ef7\u751f\u6210\u5931\u8d25");
       writeCachedReport(session.room.id, mode, reportVersion, payload);
       setReports((current) => ({ ...current, [mode]: { version: reportVersion, result: payload } }));
     } catch (error) {

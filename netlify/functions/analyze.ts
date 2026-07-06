@@ -1,4 +1,4 @@
-import type { Config, Context } from "@netlify/functions";
+import type { Context } from "@netlify/functions";
 
 type Score = {
   title: string;
@@ -187,7 +187,4 @@ export default async (req: Request, _context: Context) => {
       { status: 500 },
     );
   }
-};
-export const config: Config = {
-  method: ["POST"],
 };
