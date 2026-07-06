@@ -57,9 +57,9 @@ function fallbackReport(payload: Payload): Report {
   if (mode !== "couple") {
     const answered = payload.answers.length;
     return {
-      summary: mode === "self" ? "?????????????" : "????????????",
+      summary: mode === "self" ? "\u5df2\u751f\u6210\u4f60\u7684\u4e2a\u4eba\u504f\u597d\u6982\u89c8\u3002" : "\u5df2\u751f\u6210\u5bf9\u65b9\u7684\u504f\u597d\u6982\u89c8\u3002",
       sections: [],
-      full: `???? ${answered} ??????????????? no / ?? yes?????????????????????????????????????????`,
+      full: `\u5df2\u6574\u7406 ${answered} \u6761\u56de\u7b54\u3002\u8bf7\u91cd\u70b9\u770b\u5176\u4e2d\u7684\u5b8c\u5168 no / \u5b8c\u5168 yes\uff0c\u5b83\u4eec\u901a\u5e38\u4ee3\u8868\u66f4\u660e\u786e\u7684\u8fb9\u754c\uff1b\u9009\u62e9\u65e0\u6240\u8c13\u7684\u9898\u76ee\u66f4\u9002\u5408\u89c6\u4e3a\u5f39\u6027\u7a7a\u95f4\u3002`,
     };
   }
 
@@ -121,61 +121,73 @@ export default async (req: Request, _context: Context) => {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
 
-  const payload = (await req.json()) as Payload;
-  const apiKey = getEnv("AI_API_KEY");
-  const model = DEFAULT_MODEL;
+  try {
+    const payload = (await req.json()) as Payload;
+    const apiKey = getEnv("AI_API_KEY");
+    const model = DEFAULT_MODEL;
 
-  if (!apiKey) {
-    return Response.json(fallbackReport(payload));
-  }
+    if (!apiKey) {
+      return Response.json(fallbackReport(payload));
+    }
 
-  const prompt = {
-    role: "user",
-    content: [
-      ...ANALYSIS_PROMPT_LINES,
-      JSON.stringify({
-        mode: payload.mode ?? "couple",
-        participants: payload.participants,
-        scores: payload.scores,
-        answers: compactAnswers(payload),
+    const prompt = {
+      role: "user",
+      content: [
+        ...ANALYSIS_PROMPT_LINES,
+        JSON.stringify({
+          mode: payload.mode ?? "couple",
+          participants: payload.participants,
+          scores: payload.scores,
+          answers: compactAnswers(payload),
+        }),
+      ].join("\n"),
+    };
+
+    const response = await fetch(DEEPSEEK_BASE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "system",
+            content: "\u4f60\u53ea\u8f93\u51fa\u53ef\u89e3\u6790 JSON\uff0c\u4e0d\u8f93\u51fa Markdown\uff0c\u4e0d\u8f93\u51fa\u989d\u5916\u89e3\u91ca\u3002",
+          },
+          prompt,
+        ],
+        temperature: 0.4,
       }),
-    ].join("\n"),
-  };
+    });
 
-  const response = await fetch(DEEPSEEK_BASE_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: "system",
-          content: "你只输出可解析 JSON，不输出 Markdown，不输出额外解释。",
-        },
-        prompt,
-      ],
-      temperature: 0.4,
-    }),
-  });
+    if (!response.ok) {
+      const text = await response.text();
+      return Response.json({ error: `AI provider error: ${text.slice(0, 500)}` }, { status: 502 });
+    }
 
-  if (!response.ok) {
     const text = await response.text();
-    return Response.json({ error: `AI provider error: ${text.slice(0, 500)}` }, { status: 502 });
-  }
+    let data: { choices?: Array<{ message?: { content?: string } }> };
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return Response.json({ error: "AI provider did not return JSON." }, { status: 502 });
+    }
 
-  const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (!content) {
-    return Response.json({ error: "AI provider returned an empty response" }, { status: 502 });
-  }
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) {
+      return Response.json({ error: "AI provider returned an empty response" }, { status: 502 });
+    }
 
-  return Response.json(extractJson(content));
+    return Response.json(extractJson(content));
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : "AI \u5206\u6790\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002" },
+      { status: 500 },
+    );
+  }
 };
-
 export const config: Config = {
-  path: "/api/analyze",
   method: ["POST"],
 };
