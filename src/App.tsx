@@ -398,7 +398,7 @@ function App() {
     setReportLoading(mode);
     setNotice("");
     try {
-      const response = await fetch("/api/analyze", {
+      const response = await fetch("/.netlify/functions/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -416,7 +416,7 @@ function App() {
       try {
         payload = JSON.parse(rawPayload) as ReportResult | { error: string };
       } catch {
-        throw new Error("AI \u51fd\u6570\u6ca1\u6709\u8fd4\u56de JSON\u3002\u8bf7\u786e\u8ba4 Netlify \u6700\u65b0\u90e8\u7f72\u5b8c\u6210\uff0c\u5e76\u4e14 /api/analyze \u5df2\u6b63\u786e\u8f6c\u53d1\u5230\u51fd\u6570\u3002");
+        throw new Error("AI \u51fd\u6570\u6ca1\u6709\u8fd4\u56de JSON\u3002\u8bf7\u786e\u8ba4 Netlify \u6700\u65b0\u90e8\u7f72\u5b8c\u6210\uff0c\u5e76\u4e14 /.netlify/functions/analyze \u53ef\u4ee5\u6b63\u5e38\u8bbf\u95ee\u3002");
       }
       if (!response.ok || "error" in payload) throw new Error("error" in payload ? payload.error : "\u8bc4\u4ef7\u751f\u6210\u5931\u8d25");
       writeCachedReport(session.room.id, mode, reportVersion, payload);

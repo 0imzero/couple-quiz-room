@@ -24,7 +24,7 @@ type Report = {
 };
 
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
-const DEFAULT_MODEL = "deepseek-v4-flash";
+const DEFAULT_MODEL = "deepseek-v4-pro";
 
 const ANALYSIS_PROMPT_LINES = [
   "你是一个成熟、克制、务实的情侣同居沟通分析助手。",
