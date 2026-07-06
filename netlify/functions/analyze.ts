@@ -20,16 +20,8 @@ type Report = {
   full: string;
 };
 
-const providerDefaults = {
-  deepseek: {
-    baseUrl: "https://api.deepseek.com/chat/completions",
-    model: "deepseek-chat",
-  },
-  qwen: {
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    model: "qwen-plus",
-  },
-};
+const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
+const DEFAULT_MODEL = "deepseek-v4-flash";
 
 function getEnv(name: string) {
   const netlifyEnv = (globalThis as { Netlify?: { env?: { get(name: string): string | undefined } } }).Netlify;
@@ -103,16 +95,8 @@ export default async (req: Request, _context: Context) => {
   }
 
   const payload = (await req.json()) as Payload;
-  const provider = (getEnv("AI_PROVIDER") ?? "deepseek").toLowerCase();
   const apiKey = getEnv("AI_API_KEY");
-  const baseUrl =
-    getEnv("AI_BASE_URL") ??
-    providerDefaults[provider as keyof typeof providerDefaults]?.baseUrl ??
-    providerDefaults.deepseek.baseUrl;
-  const model =
-    getEnv("AI_MODEL") ??
-    providerDefaults[provider as keyof typeof providerDefaults]?.model ??
-    providerDefaults.deepseek.model;
+  const model = getEnv("AI_MODEL") ?? DEFAULT_MODEL;
 
   if (!apiKey) {
     return Response.json(fallbackReport(payload));
@@ -135,7 +119,7 @@ export default async (req: Request, _context: Context) => {
     ].join("\n"),
   };
 
-  const response = await fetch(baseUrl, {
+  const response = await fetch(DEEPSEEK_BASE_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
