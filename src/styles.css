@@ -792,15 +792,18 @@ meter::-webkit-meter-optimum-value {
 }
 
 .rating-control {
+  --dot-size: 24px;
+  --end-gap: calc(10% + var(--dot-size) / 2);
   position: relative;
   margin-top: 18px;
-  padding: 12px 0 4px;
+  padding: 12px 8px 4px;
+  overflow: hidden;
 }
 
 .rating-track {
   position: absolute;
-  left: 8%;
-  right: 8%;
+  left: var(--end-gap);
+  right: var(--end-gap);
   top: 24px;
   height: 8px;
   overflow: hidden;
@@ -810,16 +813,17 @@ meter::-webkit-meter-optimum-value {
 
 .rating-fill {
   height: 100%;
+  max-width: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--rose), var(--amber), var(--mint));
-  transition: width 180ms ease;
+  transition: width 140ms ease-out;
 }
 
 .rating-options {
   position: relative;
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .rating-option {
@@ -834,23 +838,44 @@ meter::-webkit-meter-optimum-value {
   font-weight: 900;
 }
 
+.rating-option small {
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 3px 7px;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
 .rating-dot {
   display: block;
-  width: 24px;
-  height: 24px;
+  width: var(--dot-size);
+  height: var(--dot-size);
   border: 3px solid #fffdfa;
   border-radius: 999px;
   background: #d9cebf;
   box-shadow: 0 5px 16px rgba(73, 48, 36, 0.18);
-  transition: transform 160ms ease, background 160ms ease;
+  transition: transform 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.rating-option:hover .rating-dot {
+  transform: scale(1.05);
 }
 
 .rating-option.selected {
   color: var(--ink);
 }
 
+.rating-option.selected small {
+  background: #242131;
+  color: #fffdfa;
+  font-weight: 950;
+  transform: translateY(-1px);
+}
+
 .rating-option.selected .rating-dot {
   background: #242131;
+  box-shadow: 0 6px 18px rgba(36, 33, 49, 0.28);
   transform: scale(1.12);
 }
 
@@ -859,6 +884,7 @@ meter::-webkit-meter-optimum-value {
   margin-top: 10px;
   color: #4b4354;
   font-size: 0.92rem;
+  font-weight: 950;
   text-align: right;
 }
 

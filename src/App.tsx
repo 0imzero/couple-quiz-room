@@ -42,6 +42,11 @@ type ReportResult = {
   full: string;
 };
 
+type CachedReport = {
+  version: string;
+  result: ReportResult;
+};
+
 type ReportMode = "self" | "partner" | "couple";
 
 const reportModeLabels: Record<ReportMode, string> = {
@@ -67,6 +72,25 @@ function selfAnswersForSection(section: Section, answerMap: Map<number, Answer>)
   return section.questionIds.filter((questionId) => answerMap.has(questionId)).length;
 }
 
+function getReportCacheKey(roomId: string, mode: ReportMode) {
+  return `couple-quiz-report-${roomId}-${mode}`;
+}
+
+function readCachedReport(roomId: string, mode: ReportMode, version: string) {
+  try {
+    const raw = localStorage.getItem(getReportCacheKey(roomId, mode));
+    if (!raw) return null;
+    const cached = JSON.parse(raw) as CachedReport;
+    return cached.version === version ? cached.result : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedReport(roomId: string, mode: ReportMode, version: string, result: ReportResult) {
+  localStorage.setItem(getReportCacheKey(roomId, mode), JSON.stringify({ version, result } satisfies CachedReport));
+}
+
 function App() {
   const [session, setSession] = useState<Session | null>(() => loadSession());
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -75,7 +99,8 @@ function App() {
   const [openNotes, setOpenNotes] = useState<Set<number>>(new Set());
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
-  const [reports, setReports] = useState<Partial<Record<ReportMode, ReportResult>>>({});
+  const [reports, setReports] = useState<Partial<Record<ReportMode, CachedReport>>>({});
+  const [activeReportMode, setActiveReportMode] = useState<ReportMode | null>(null);
   const [reportLoading, setReportLoading] = useState<ReportMode | null>(null);
   const workspaceTopRef = useRef<HTMLElement | null>(null);
 
@@ -98,6 +123,11 @@ function App() {
   const canAnalyzeSelf = selfAnsweredCount === questions.length;
   const canAnalyzePartner = canRevealPartner && partnerAnsweredCount === questions.length;
   const canAnalyzeCouple = canRevealPartner;
+  const reportVersion = useMemo(() => {
+    const selfVersion = selfParticipant?.submitted_at ?? "draft";
+    const partnerVersion = partnerParticipant?.submitted_at ?? "draft";
+    return `${session?.room.id ?? "no-room"}:${selfVersion}:${partnerVersion}`;
+  }, [partnerParticipant?.submitted_at, selfParticipant?.submitted_at, session?.room.id]);
 
   const overallScore = useMemo(() => {
     const available = scores.filter((score) => score.score !== null);
@@ -326,6 +356,7 @@ function App() {
     setParticipants([]);
     setAnswers([]);
     setReports({});
+    setActiveReportMode(null);
     setNotice("");
   }
 
@@ -343,6 +374,7 @@ function App() {
 
   async function requestReport(mode: ReportMode) {
     if (!session) return;
+    setActiveReportMode(mode);
     if (mode === "self" && !canAnalyzeSelf) {
       setNotice("\u7b54\u5b8c 50 \u9898\u540e\u624d\u80fd\u751f\u6210\u81ea\u5df1\u7684\u5206\u6790\u3002");
       return;
@@ -353,6 +385,13 @@ function App() {
     }
     if (mode === "couple" && !canAnalyzeCouple) {
       setNotice("\u53cc\u65b9\u90fd\u63d0\u4ea4\u540e\u624d\u80fd\u751f\u6210\u5b8c\u6574\u5171\u540c\u5206\u6790\u3002");
+      return;
+    }
+
+    const cached = readCachedReport(session.room.id, mode, reportVersion);
+    if (cached) {
+      setReports((current) => ({ ...current, [mode]: { version: reportVersion, result: cached } }));
+      setNotice("");
       return;
     }
 
@@ -374,7 +413,8 @@ function App() {
       });
       const payload = (await response.json()) as ReportResult | { error: string };
       if (!response.ok || "error" in payload) throw new Error("error" in payload ? payload.error : "\u8bc4\u4ef7\u751f\u6210\u5931\u8d25");
-      setReports((current) => ({ ...current, [mode]: payload }));
+      writeCachedReport(session.room.id, mode, reportVersion, payload);
+      setReports((current) => ({ ...current, [mode]: { version: reportVersion, result: payload } }));
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "\u8bc4\u4ef7\u751f\u6210\u5931\u8d25");
     } finally {
@@ -542,16 +582,12 @@ function App() {
               <ReportButton mode="partner" loading={reportLoading} disabled={!canAnalyzePartner} onClick={requestReport} />
               <ReportButton mode="couple" loading={reportLoading} disabled={!canAnalyzeCouple} onClick={requestReport} />
               {reportLoading && <AnalysisLoading mode={reportLoading} />}
-              {(["self", "partner", "couple"] as ReportMode[]).map((mode) => {
-                const report = reports[mode];
-                if (!report) return null;
-                return (
-                  <div className="report-content" key={mode}>
-                    <strong>{reportModeLabels[mode]}：{report.summary}</strong>
-                    <p>{report.full}</p>
-                  </div>
-                );
-              })}
+              {activeReportMode && reports[activeReportMode]?.version === reportVersion && (
+                <div className="report-content" key={activeReportMode}>
+                  <strong>{reportModeLabels[activeReportMode]}：{reports[activeReportMode]?.result.summary}</strong>
+                  <p>{reports[activeReportMode]?.result.full}</p>
+                </div>
+              )}
             </section>
           </aside>
         </div>
