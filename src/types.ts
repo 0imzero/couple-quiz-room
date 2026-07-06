@@ -20,6 +20,7 @@ export type Participant = {
   side: Side;
   nickname: string;
   client_token: string;
+  submitted_at?: string | null;
   updated_at?: string;
 };
 

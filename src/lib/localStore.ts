@@ -45,6 +45,9 @@ export function getLocalRoomByCode(code: string) {
 export function upsertLocalParticipant(room: Room, side: Side, nickname: string): Participant {
   const participants = readJson<Participant[]>(LOCAL_PARTICIPANTS_KEY, []);
   const existing = participants.find((participant) => participant.room_id === room.id && participant.side === side);
+  if (existing && existing.nickname.trim() !== nickname.trim()) {
+    throw new Error(`${side === "male" ? "男生" : "女生"} side 已由「${existing.nickname}」使用，不能换名字登录。`);
+  }
   const participant: Participant = existing
     ? { ...existing, nickname, updated_at: new Date().toISOString() }
     : {
@@ -53,6 +56,7 @@ export function upsertLocalParticipant(room: Room, side: Side, nickname: string)
         side,
         nickname,
         client_token: crypto.randomUUID(),
+        submitted_at: null,
         updated_at: new Date().toISOString(),
       };
   writeJson(LOCAL_PARTICIPANTS_KEY, [
@@ -60,6 +64,15 @@ export function upsertLocalParticipant(room: Room, side: Side, nickname: string)
     participant,
   ]);
   return participant;
+}
+
+export function submitLocalParticipant(participantId: string) {
+  const participants = readJson<Participant[]>(LOCAL_PARTICIPANTS_KEY, []);
+  const participant = participants.find((item) => item.id === participantId);
+  if (!participant) return null;
+  const submitted = { ...participant, submitted_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+  writeJson(LOCAL_PARTICIPANTS_KEY, [...participants.filter((item) => item.id !== participantId), submitted]);
+  return submitted;
 }
 
 export function getLocalParticipants(roomId: string) {

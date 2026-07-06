@@ -12,9 +12,13 @@ create table if not exists public.couple_participants (
   side text not null check (side in ('male', 'female')),
   nickname text not null,
   client_token text not null,
+  submitted_at timestamptz,
   updated_at timestamptz not null default now(),
   unique (room_id, side)
 );
+
+alter table public.couple_participants
+  add column if not exists submitted_at timestamptz;
 
 create table if not exists public.couple_answers (
   id uuid primary key default gen_random_uuid(),
@@ -86,5 +90,16 @@ create policy "anon can read reports" on public.couple_reports for select to ano
 drop policy if exists "anon can create reports" on public.couple_reports;
 create policy "anon can create reports" on public.couple_reports for insert to anon with check (true);
 
-alter publication supabase_realtime add table public.couple_participants;
-alter publication supabase_realtime add table public.couple_answers;
+do $$
+begin
+  alter publication supabase_realtime add table public.couple_participants;
+exception
+  when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.couple_answers;
+exception
+  when duplicate_object then null;
+end $$;

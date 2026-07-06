@@ -7,7 +7,7 @@ type Score = {
 };
 
 type Payload = {
-  participants: Array<{ side: "male" | "female"; nickname: string }>;
+  participants: Array<{ side: "male" | "female"; nickname: string; submitted_at?: string | null }>;
   answers: Array<{ side: "male" | "female"; question_id: number; value: number; note: string }>;
   questions: Array<{ id: number; sectionId: string; text: string }>;
   scores: Score[];
@@ -22,6 +22,17 @@ type Report = {
 
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
 const DEFAULT_MODEL = "deepseek-v4-flash";
+
+const ANALYSIS_PROMPT_LINES = [
+  "你是一个成熟、克制、务实的情侣同居沟通分析助手。",
+  "请基于双方 1-5 分态度、备注和分区得分，输出精简但完整的中文评价。",
+  "评分语义：1=完全 no，2=偏 no，3=无所谓/都可以，4=偏 yes，5=完全 yes。",
+  "重要规则：只要任意一方在某题选择 3，就代表这题对他/她没有强边界，不应被解读成冲突。",
+  "不要制造焦虑，不要下定论说适不适合，只指出高一致区、风险区和建议沟通的问题。",
+  "请把备注看得比数字更重要：备注里出现条件、边界、例外时，要用温和语言总结。",
+  "只返回 JSON，结构必须是：",
+  '{"summary":"一句话总评","sections":[{"title":"分区名","score":80,"comment":"一句话"}],"full":"完整评价，200-500 字"}',
+];
 
 function getEnv(name: string) {
   const netlifyEnv = (globalThis as { Netlify?: { env?: { get(name: string): string | undefined } } }).Netlify;
@@ -105,12 +116,7 @@ export default async (req: Request, _context: Context) => {
   const prompt = {
     role: "user",
     content: [
-      "你是一个成熟、克制、务实的情侣同居沟通分析助手。",
-      "请基于双方 1-5 分态度、备注和分区得分，输出精简但完整的中文评价。",
-      "1=完全 no，2=偏 no，3=无所谓，4=偏 yes，5=完全 yes。",
-      "不要制造焦虑，不要下定论说适不适合，只指出高一致区、风险区和建议沟通的问题。",
-      "只返回 JSON，结构必须是：",
-      '{"summary":"一句话总评","sections":[{"title":"分区名","score":80,"comment":"一句话"}],"full":"完整评价，200-500 字"}',
+      ...ANALYSIS_PROMPT_LINES,
       JSON.stringify({
         participants: payload.participants,
         scores: payload.scores,
@@ -156,4 +162,3 @@ export const config: Config = {
   path: "/api/analyze",
   method: ["POST"],
 };
-

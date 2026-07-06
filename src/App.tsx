@@ -5,6 +5,7 @@ import {
   Loader2,
   MessageSquareText,
   RefreshCw,
+  Send,
   Sparkles,
   UserRound,
   UsersRound,
@@ -19,12 +20,13 @@ import {
   getLocalRoomByCode,
   loadSession,
   saveSession,
+  submitLocalParticipant,
   upsertLocalAnswer,
   upsertLocalParticipant,
 } from "./lib/localStore";
 import { computeSectionScores, getAnswerMap, getPartnerSide, summarizeProgress } from "./lib/scoring";
 import { isSupabaseConfigured, supabase } from "./lib/supabase";
-import type { Answer, Participant, Room, Section, Session, Side } from "./types";
+import type { Answer, Participant, Room, Section, SectionScore, Session, Side } from "./types";
 
 const referenceImages: Record<string, string> = {
   sleep: "/reference/sleep.png",
@@ -74,15 +76,21 @@ function App() {
   const selfAnswers = getAnswerMap(answers, selfSide);
   const partnerAnswers = getAnswerMap(answers, partnerSide);
   const progress = summarizeProgress(answers);
-  const scores = computeSectionScores(answers, selfSide);
   const selfParticipant = participants.find((participant) => participant.side === selfSide) ?? session?.participant;
   const partnerParticipant = participants.find((participant) => participant.side === partnerSide);
+  const selfSubmitted = Boolean(selfParticipant?.submitted_at);
+  const partnerSubmitted = Boolean(partnerParticipant?.submitted_at);
+  const canRevealPartner = selfSubmitted && partnerSubmitted;
+  const visibleAnswers = canRevealPartner ? answers : answers.filter((answer) => answer.side === selfSide);
+  const scores = canRevealPartner ? computeSectionScores(visibleAnswers, selfSide) : [];
+  const selfAnsweredCount = selfSide === "male" ? progress.maleAnswered : progress.femaleAnswered;
+  const canSubmit = selfAnsweredCount === questions.length;
 
   const overallScore = useMemo(() => {
     const available = scores.filter((score) => score.score !== null);
-    if (!available.length) return null;
+    if (!canRevealPartner || !available.length) return null;
     return Math.round(available.reduce((sum, score) => sum + (score.score ?? 0), 0) / available.length);
-  }, [scores]);
+  }, [canRevealPartner, scores]);
 
   useEffect(() => {
     if (!session) return;
@@ -134,18 +142,25 @@ function App() {
   async function upsertParticipant(room: Room, side: Side, nickname: string) {
     if (!supabase) return upsertLocalParticipant(room, side, nickname);
 
-    const clientToken = crypto.randomUUID();
+    const { data: existing, error: selectError } = await supabase
+      .from("couple_participants")
+      .select("*")
+      .eq("room_id", room.id)
+      .eq("side", side)
+      .maybeSingle();
+
+    if (selectError) throw new Error(selectError.message);
+    if (existing) {
+      const participant = existing as Participant;
+      if (participant.nickname.trim() !== nickname.trim()) {
+        throw new Error(`${sideLabel(side)} 已由「${participant.nickname}」使用，不能换名字登录。`);
+      }
+      return participant;
+    }
+
     const { data, error } = await supabase
       .from("couple_participants")
-      .upsert(
-        {
-          room_id: room.id,
-          side,
-          nickname,
-          client_token: clientToken,
-        },
-        { onConflict: "room_id,side" },
-      )
+      .insert({ room_id: room.id, side, nickname, client_token: crypto.randomUUID() })
       .select()
       .single();
 
@@ -159,7 +174,7 @@ function App() {
     try {
       const code = generateRoomCode();
       const room = supabase ? await createSupabaseRoom(code) : createLocalRoom(code);
-      const participant = await upsertParticipant(room, side, nickname);
+      const participant = await upsertParticipant(room, side, nickname.trim());
       const next = { room, participant };
       saveSession(next);
       setSession(next);
@@ -191,7 +206,7 @@ function App() {
       const room = supabase ? await findSupabaseRoom(code) : getLocalRoomByCode(code);
       if (!room) throw new Error("没有找到这个房间码");
 
-      const participant = await upsertParticipant(room, side, nickname);
+      const participant = await upsertParticipant(room, side, nickname.trim());
       const next = { room, participant };
       saveSession(next);
       setSession(next);
@@ -254,6 +269,44 @@ function App() {
     ]);
   }
 
+  async function submitMyAnswers() {
+    if (!session) return;
+    if (!canSubmit) {
+      setNotice(`你还有 ${questions.length - selfAnsweredCount} 题没答完，答完 50 题后才能提交。`);
+      return;
+    }
+
+    if (!supabase) {
+      const submitted = submitLocalParticipant(session.participant.id);
+      if (submitted) {
+        const next = { ...session, participant: submitted };
+        saveSession(next);
+        setSession(next);
+      }
+      await loadRoomState(session.room.id);
+      setNotice("已提交。双方都提交后就能看到匹配度和对方备注。");
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("couple_participants")
+      .update({ submitted_at: new Date().toISOString() })
+      .eq("id", session.participant.id)
+      .select()
+      .single();
+
+    if (error) {
+      setNotice(error.message);
+      return;
+    }
+
+    const next = { ...session, participant: data as Participant };
+    saveSession(next);
+    setSession(next);
+    await loadRoomState(session.room.id);
+    setNotice("已提交。双方都提交后就能看到匹配度和对方备注。");
+  }
+
   function leaveRoom() {
     clearSession();
     setSession(null);
@@ -271,6 +324,10 @@ function App() {
 
   async function requestReport() {
     if (!session) return;
+    if (!canRevealPartner) {
+      setNotice("双方都提交后才能生成完整评价。");
+      return;
+    }
     setReportLoading(true);
     setNotice("");
     try {
@@ -280,7 +337,7 @@ function App() {
         body: JSON.stringify({
           room: session.room,
           participants,
-          answers,
+          answers: visibleAnswers,
           questions,
           scores,
           selfSide,
@@ -324,10 +381,23 @@ function App() {
         </div>
 
         {!isSupabaseConfigured && (
-          <div className="soft-alert">当前是本地预览模式。填入 Supabase 环境变量并部署后，双方数据会实时互通。</div>
+          <div className="soft-alert">当前是本地预览模式。填入 Supabase 环境变量并部署后，数据会按提交状态展示。</div>
         )}
 
-        <PartnerStatus self={selfParticipant} partner={partnerParticipant} progress={progress} selfSide={selfSide} />
+        <PartnerStatus
+          self={selfParticipant}
+          partner={partnerParticipant}
+          progress={progress}
+          selfSide={selfSide}
+          selfSubmitted={selfSubmitted}
+          partnerSubmitted={partnerSubmitted}
+        />
+
+        <button className="primary-button wide submit-button" type="button" disabled={!canSubmit} onClick={submitMyAnswers}>
+          <Send size={16} />
+          {selfSubmitted ? "重新提交当前答案" : "提交我的答案"}
+        </button>
+        {!canSubmit && <p className="helper-text">已答 {selfAnsweredCount}/50，答完后才能提交。</p>}
 
         <nav className="section-nav" aria-label="问答分区">
           {sections.map((section) => {
@@ -343,7 +413,7 @@ function App() {
               >
                 <span>{section.shortTitle}</span>
                 <small>
-                  {answered}/10 · {score?.score ?? "--"}
+                  {answered}/10 · {canRevealPartner ? (score?.score ?? "--") : "提交后"}
                 </small>
               </button>
             );
@@ -364,7 +434,7 @@ function App() {
           </div>
           <div className="overall-score">
             <span>匹配度</span>
-            <strong>{overallScore ?? "--"}</strong>
+            <strong>{canRevealPartner ? (overallScore ?? "--") : "--"}</strong>
           </div>
         </header>
 
@@ -373,6 +443,9 @@ function App() {
           <Ribbon label="女生" value={progress.femaleAnswered} total={progress.total} color="#ff6e8f" />
         </div>
 
+        {!canRevealPartner && (
+          <div className="soft-alert">双方都完成 50 题并提交后，才会显示对方答案、备注、匹配度和 AI 评价。</div>
+        )}
         {notice && <div className="notice">{notice}</div>}
 
         <div className="content-grid">
@@ -381,58 +454,28 @@ function App() {
               .filter((question) => question.sectionId === activeSection.id)
               .map((question) => {
                 const answer = selfAnswers.get(question.id);
-                const partnerAnswer = partnerAnswers.get(question.id);
+                const partnerAnswer = canRevealPartner ? partnerAnswers.get(question.id) : undefined;
                 const isNoteOpen = openNotes.has(question.id);
                 return (
-                  <article className="question-card" key={question.id}>
-                    <div className="question-topline">
-                      <span className="question-number">{String(question.id).padStart(2, "0")}</span>
-                      <p>{question.text}</p>
-                    </div>
-
-                    <div className="slider-row">
-                      <input
-                        aria-label={`${question.text} 答案`}
-                        min={1}
-                        max={5}
-                        step={1}
-                        type="range"
-                        value={answer?.value ?? 3}
-                        onChange={(event) =>
-                          void saveAnswer(question.id, { value: Number(event.currentTarget.value) })
-                        }
-                      />
-                      <strong>{answerLabels[(answer?.value ?? 3) - 1]}</strong>
-                    </div>
-
-                    <div className="answer-meta">
-                      <span>对方：{partnerAnswer ? answerLabels[partnerAnswer.value - 1] : "还没答"}</span>
-                      <button
-                        type="button"
-                        className={answer?.note ? "note-toggle filled" : "note-toggle"}
-                        onClick={() =>
-                          setOpenNotes((current) => {
-                            const next = new Set(current);
-                            if (next.has(question.id)) next.delete(question.id);
-                            else next.add(question.id);
-                            return next;
-                          })
-                        }
-                      >
-                        <MessageSquareText size={16} />
-                        备注
-                      </button>
-                    </div>
-
-                    {isNoteOpen && (
-                      <textarea
-                        rows={3}
-                        placeholder="补充你的边界、原因或可接受条件"
-                        value={answer?.note ?? ""}
-                        onChange={(event) => void saveAnswer(question.id, { note: event.currentTarget.value })}
-                      />
-                    )}
-                  </article>
+                  <QuestionCard
+                    key={question.id}
+                    questionId={question.id}
+                    questionText={question.text}
+                    answer={answer}
+                    partnerAnswer={partnerAnswer}
+                    noteOpen={isNoteOpen}
+                    revealPartner={canRevealPartner}
+                    onToggleNote={() =>
+                      setOpenNotes((current) => {
+                        const next = new Set(current);
+                        if (next.has(question.id)) next.delete(question.id);
+                        else next.add(question.id);
+                        return next;
+                      })
+                    }
+                    onValueChange={(value) => void saveAnswer(question.id, { value })}
+                    onNoteChange={(note) => void saveAnswer(question.id, { note })}
+                  />
                 );
               })}
           </div>
@@ -447,13 +490,11 @@ function App() {
                 <ClipboardList size={18} />
                 <h3>分区得分</h3>
               </div>
-              {scores.map((score) => (
-                <div className="score-line" key={score.sectionId}>
-                  <span>{score.title}</span>
-                  <meter min={0} max={100} value={score.score ?? 0} />
-                  <strong>{score.score ?? "--"}</strong>
-                </div>
-              ))}
+              {canRevealPartner ? (
+                scores.map((score) => <ScoreLine key={score.sectionId} score={score} />)
+              ) : (
+                <p className="muted-copy">提交前只显示双方进度，不显示匹配度。</p>
+              )}
             </section>
 
             <section className="report-box">
@@ -461,7 +502,7 @@ function App() {
                 <Sparkles size={18} />
                 <h3>完整评价</h3>
               </div>
-              <button className="primary-button wide" type="button" onClick={requestReport} disabled={reportLoading}>
+              <button className="primary-button wide" type="button" onClick={requestReport} disabled={reportLoading || !canRevealPartner}>
                 {reportLoading ? <Loader2 className="spin" size={17} /> : <Sparkles size={17} />}
                 生成评价
               </button>
@@ -476,6 +517,97 @@ function App() {
         </div>
       </section>
     </main>
+  );
+}
+
+function QuestionCard({
+  questionId,
+  questionText,
+  answer,
+  partnerAnswer,
+  noteOpen,
+  revealPartner,
+  onToggleNote,
+  onValueChange,
+  onNoteChange,
+}: {
+  questionId: number;
+  questionText: string;
+  answer?: Answer;
+  partnerAnswer?: Answer;
+  noteOpen: boolean;
+  revealPartner: boolean;
+  onToggleNote: () => void;
+  onValueChange: (value: number) => void;
+  onNoteChange: (note: string) => void;
+}) {
+  const [noteDraft, setNoteDraft] = useState(answer?.note ?? "");
+  const [isFocused, setIsFocused] = useState(false);
+
+  useEffect(() => {
+    if (!isFocused) setNoteDraft(answer?.note ?? "");
+  }, [answer?.note, isFocused]);
+
+  useEffect(() => {
+    if (!isFocused) return;
+    const timer = window.setTimeout(() => onNoteChange(noteDraft), 600);
+    return () => window.clearTimeout(timer);
+  }, [isFocused, noteDraft]);
+
+  return (
+    <article className="question-card">
+      <div className="question-topline">
+        <span className="question-number">{String(questionId).padStart(2, "0")}</span>
+        <p>{questionText}</p>
+      </div>
+
+      <div className="slider-row">
+        <input
+          aria-label={`${questionText} 答案`}
+          min={1}
+          max={5}
+          step={1}
+          type="range"
+          value={answer?.value ?? 3}
+          onChange={(event) => onValueChange(Number(event.currentTarget.value))}
+        />
+        <strong>{answerLabels[(answer?.value ?? 3) - 1]}</strong>
+      </div>
+
+      <div className="answer-meta">
+        <span>对方：{revealPartner ? (partnerAnswer ? answerLabels[partnerAnswer.value - 1] : "未作答") : "已答状态提交后可见"}</span>
+        <button type="button" className={answer?.note ? "note-toggle filled" : "note-toggle"} onClick={onToggleNote}>
+          <MessageSquareText size={16} />
+          备注
+        </button>
+      </div>
+
+      {noteOpen && (
+        <textarea
+          rows={3}
+          placeholder="补充你的边界、原因或可接受条件"
+          value={noteDraft}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => {
+            setIsFocused(false);
+            onNoteChange(noteDraft);
+          }}
+          onChange={(event) => setNoteDraft(event.currentTarget.value)}
+        />
+      )}
+
+      {revealPartner && partnerAnswer?.note && <div className="partner-note">对方备注：{partnerAnswer.note}</div>}
+    </article>
+  );
+}
+
+function ScoreLine({ score }: { score: SectionScore }) {
+  return (
+    <div className="score-line">
+      <span>{score.title}</span>
+      <meter min={0} max={100} value={score.score ?? 0} />
+      <strong>{score.score ?? "--"}</strong>
+    </div>
   );
 }
 
@@ -499,11 +631,8 @@ function EntryScreen({
     <main className="entry-screen">
       <section className="entry-copy">
         <p className="eyebrow">Shared home agreement</p>
-        <h1>把同居前的小事，提前说清楚。</h1>
-        <p>
-          50 个问题，5 档态度，双方实时同步。答完后可以看到每个生活分区的差异，也可以让 DeepSeek 或 Qwen
-          生成一份简洁评价。
-        </p>
+        <h1>同居前的细节，先认真聊一次。</h1>
+        <p>50 个问题，5 档态度。双方提交前只展示进度；提交后再查看分区差异，并生成一份 AI 评价。</p>
         <div className="mini-gallery" aria-label="题目分区预览">
           {sections.map((section) => (
             <img key={section.id} src={referenceImages[section.id]} alt={`${section.shortTitle} 分区预览`} />
@@ -545,11 +674,7 @@ function EntryScreen({
             placeholder="输入对方的邀请码"
             onChange={(event) => setRoomCode(normalizeCode(event.target.value))}
           />
-          <button
-            disabled={!canSubmit || roomCode.length < 4}
-            type="button"
-            onClick={() => onJoin(roomCode, side, nickname)}
-          >
+          <button disabled={!canSubmit || roomCode.length < 4} type="button" onClick={() => onJoin(roomCode, side, nickname)}>
             加入
           </button>
         </div>
@@ -566,11 +691,15 @@ function PartnerStatus({
   partner,
   progress,
   selfSide,
+  selfSubmitted,
+  partnerSubmitted,
 }: {
   self?: Participant;
   partner?: Participant;
   progress: ReturnType<typeof summarizeProgress>;
   selfSide: Side;
+  selfSubmitted: boolean;
+  partnerSubmitted: boolean;
 }) {
   const selfDone = selfSide === "male" ? progress.maleAnswered : progress.femaleAnswered;
   const partnerDone = selfSide === "male" ? progress.femaleAnswered : progress.maleAnswered;
@@ -582,7 +711,7 @@ function PartnerStatus({
         <div>
           <span>{self?.nickname ?? "我"}</span>
           <small>
-            {sideLabel(selfSide)} · {selfDone}/50
+            {sideLabel(selfSide)} · {selfDone}/50 · {selfSubmitted ? "已提交" : "未提交"}
           </small>
         </div>
       </div>
@@ -591,11 +720,11 @@ function PartnerStatus({
         <div>
           <span>{partner?.nickname ?? "等待对方加入"}</span>
           <small>
-            {sideLabel(getPartnerSide(selfSide))} · {partnerDone}/50
+            {sideLabel(getPartnerSide(selfSide))} · {partnerDone}/50 · {partnerSubmitted ? "已提交" : "未提交"}
           </small>
         </div>
       </div>
-      <div className="paired-count">已对齐 {progress.paired} 个问题</div>
+      <div className="paired-count">双方都提交后显示具体差异</div>
     </div>
   );
 }

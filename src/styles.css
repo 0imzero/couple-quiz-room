@@ -761,3 +761,32 @@ meter::-webkit-meter-optimum-value {
     text-align: left;
   }
 }
+
+.helper-text,
+.muted-copy {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.submit-button {
+  margin-top: 2px;
+}
+
+.partner-note {
+  margin-top: 12px;
+  border-left: 4px solid #8067ff;
+  border-radius: 6px;
+  background: #f4f1ff;
+  padding: 10px 12px;
+  color: #4d4268;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.entry-copy h1 {
+  max-width: 680px;
+  font-size: clamp(2.35rem, 5.3vw, 5rem);
+  line-height: 1;
+}

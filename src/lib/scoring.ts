@@ -11,6 +11,11 @@ export function getPartnerSide(side: Side): Side {
   return side === "male" ? "female" : "male";
 }
 
+export function scorePair(selfValue: number, partnerValue: number) {
+  if (selfValue === 3 || partnerValue === 3) return 100;
+  return Math.max(0, 100 - Math.abs(selfValue - partnerValue) * 25);
+}
+
 export function computeSectionScores(answers: Answer[], selfSide: Side): SectionScore[] {
   const self = getAnswerMap(answers, selfSide);
   const partner = getAnswerMap(answers, getPartnerSide(selfSide));
@@ -22,30 +27,27 @@ export function computeSectionScores(answers: Answer[], selfSide: Side): Section
     const partnerValues = section.questionIds
       .map((questionId) => partner.get(questionId)?.value)
       .filter((value): value is number => typeof value === "number");
-    const pairedDiffs = section.questionIds
+    const pairedScores = section.questionIds
       .map((questionId) => {
         const selfValue = self.get(questionId)?.value;
         const partnerValue = partner.get(questionId)?.value;
         if (typeof selfValue !== "number" || typeof partnerValue !== "number") return null;
-        return Math.abs(selfValue - partnerValue);
+        return scorePair(selfValue, partnerValue);
       })
       .filter((value): value is number => value !== null);
 
     const average = (values: number[]) =>
       values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-    const score =
-      pairedDiffs.length > 0
-        ? Math.round(
-            pairedDiffs.reduce((sum, diff) => sum + (100 - diff * 25), 0) / pairedDiffs.length,
-          )
-        : null;
+    const score = pairedScores.length
+      ? Math.round(pairedScores.reduce((sum, value) => sum + value, 0) / pairedScores.length)
+      : null;
 
     return {
       sectionId: section.id,
       title: section.shortTitle,
       selfAnswered: selfValues.length,
       partnerAnswered: partnerValues.length,
-      paired: pairedDiffs.length,
+      paired: pairedScores.length,
       score,
       selfAverage: average(selfValues),
       partnerAverage: average(partnerValues),
